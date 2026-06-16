@@ -1,31 +1,24 @@
-"""Railway entry point — runs Memory Agent API + Slack Bot together."""
-import os
-import sys
-import asyncio
-import threading
-import uvicorn
+"""Railway entry point — Memory Agent API with Slack Bot."""
+import os, sys, asyncio, threading, uvicorn
 
-print("[railway] Starting Loom Cloud Agent...")
+PORT = int(os.environ.get("PORT", "8000"))
+print(f"[railway] Starting on port {PORT}...", flush=True)
 
-# Start FastAPI in a background thread
-def start_api():
-    port = int(os.environ.get("PORT", "8000"))
-    print(f"[railway] Memory Agent API on port {port}")
-    uvicorn.run("memory_agent.main:app", host="0.0.0.0", port=port, log_level="info")
-
-# Start Slack bot in another thread (or skip if no tokens)
+# Slack bot in background
 def start_slack():
-    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    app_token = os.environ.get("SLACK_APP_TOKEN", "")
-    if not slack_token or not app_token:
-        print("[railway] Slack tokens not set — skipping bot")
+    if not os.environ.get("SLACK_BOT_TOKEN") or not os.environ.get("SLACK_APP_TOKEN"):
+        print("[railway] No Slack tokens — skipping bot", flush=True)
         return
-
+    try:
+        import nest_asyncio; nest_asyncio.apply()
+    except ImportError:
+        pass
     from task_agents.slack_bot import main as slack_main
-    print("[railway] Starting Slack bot...")
+    print("[railway] Slack bot running", flush=True)
     asyncio.run(slack_main())
 
-api_thread = threading.Thread(target=start_api, daemon=True)
-api_thread.start()
+threading.Thread(target=start_slack, daemon=True).start()
 
-start_slack()  # blocks here (Socket Mode keeps it alive)
+# FastAPI on main thread — Railway health checks /health
+print(f"[railway] API → http://0.0.0.0:{PORT}/health", flush=True)
+uvicorn.run("memory_agent.main:app", host="0.0.0.0", port=PORT, log_level="info")
