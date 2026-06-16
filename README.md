@@ -17,7 +17,59 @@ You: /teach coding:convention Use async/await, never raw promises
 
 ## Setup (zero to working in 10 min)
 
-### Step 1: Supabase (free tier — 5 min)
+### Fast path: paste this into Claude Code
+
+No manual setup. Paste this prompt. Claude does everything.
+
+```
+You are setting up Loom Cloud Agent — shared memory for AI coding tools.
+
+Step 1: Ask me for my Supabase connection URI.
+If I don't have one, tell me to go to https://supabase.com → New Project → create one → Project Settings → Database → Connection String → URI tab → copy it. Then ask again.
+
+Step 2: Run these commands:
+```bash
+git clone https://github.com/Kaushik-hub306/Loom-cloud-agent.git
+cd Loom-cloud-agent
+pip install -r requirements.txt
+```
+
+Step 3: Run the database setup (replace SUPABASE_URI with what I gave you):
+```bash
+python3 -c "
+import psycopg2
+conn = psycopg2.connect('SUPABASE_URI')
+cur = conn.cursor()
+cur.execute('CREATE EXTENSION IF NOT EXISTS vector;')
+cur.execute('''CREATE TABLE IF NOT EXISTS rules (
+    id TEXT PRIMARY KEY, domain TEXT DEFAULT 'general', rule_type TEXT DEFAULT 'convention',
+    rule TEXT NOT NULL, example TEXT DEFAULT '', confidence INTEGER DEFAULT 5,
+    sources JSONB DEFAULT '[]', source_type TEXT DEFAULT 'setup',
+    embedding VECTOR(768), project TEXT DEFAULT 'loom-agent',
+    created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+);''')
+conn.commit()
+print('Database ready.')
+conn.close()
+"
+```
+
+Step 4: Connect Claude Code to the shared memory. Replace SUPABASE_URI and REPO_PATH with the actual values:
+```bash
+claude mcp add loom-memory \
+  --env LOOM_DATABASE_URL="SUPABASE_URI" \
+  -- python3 "REPO_PATH/memory_agent/mcp_server.py"
+```
+
+Step 5: Verify. Call the session_init tool and confirm it says "Team Conventions" in the response. Then say to me:
+"Setup complete. Your team memory is live. Try teaching something: in Slack /teach coding:convention your rule, then ask Claude Code to write code that uses it."
+
+If anything fails at any step, tell me what broke. Do not skip steps without confirming success.
+```
+
+### Manual path: step by step
+
+#### Step 1: Supabase (free tier — 5 min)
 
 1. Go to https://supabase.com → Sign up → **New Project**
 2. Name: `loom-memory` | Password: generate one | Region: closest to you
