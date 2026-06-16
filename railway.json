@@ -1,0 +1,12 @@
+{
+  "build": {
+    "builder": "nixpacks",
+    "buildCommand": "pip install -r requirements.txt"
+  },
+  "deploy": {
+    "startCommand": "python3 run.py",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 10,
+    "restartPolicyType": "ALWAYS"
+  }
+}
