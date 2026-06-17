@@ -1,0 +1,22 @@
+# Railway deployment — Memory Agent + Slack Listener
+# Set these env vars in the Railway dashboard (Environment > Variables):
+#
+# Required:
+#   DATABASE_URL        — Supabase Postgres connection string
+#   SLACK_BOT_TOKEN     — Slack bot token (xoxb-...)
+#   SLACK_APP_TOKEN     — Slack app-level token (xapp-...)
+#
+# Optional:
+#   LOOM_SILENT=true    — Silent mode: captures all messages, never responds
+#                         (use when Cursor is the primary bot)
+#   LOOM_LLM_MODEL      — LLM model (gemini, deepseek, claude, chatgpt)
+#                         Default: deepseek
+#   PORT                — HTTP port (default: 8000)
+#   MEMORY_AGENT_URL    — URL for Slack bot to reach the API
+#                         Default: http://localhost:8000
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python run.py"

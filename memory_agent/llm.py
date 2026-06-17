@@ -84,9 +84,24 @@ def format_memories_for_prompt(memories: list) -> str:
     return "\n".join(lines)
 
 
-def build_system_prompt(task: str, memories: list, role: str = "", thread_history: str = "") -> str:
-    """Build the full system prompt with memory context injected."""
+def build_system_prompt(task: str, memories: list, role: str = "", thread_history: str = "",
+                       contexts: list[dict] | None = None) -> str:
+    """Build the full system prompt with memory context and conversation context injected."""
     memory_block = format_memories_for_prompt(memories)
+
+    # Conversation context block — recent summaries from this or related channels
+    context_block = ""
+    if contexts:
+        lines = ["## Recent Context (from shared memory)", ""]
+        for ctx in contexts:
+            domain = ctx.get("domain", "general")
+            summary = ctx.get("summary", "")
+            created = ctx.get("created_at", "")[:10] if ctx.get("created_at") else ""
+            channel = ctx.get("channel", "")
+            lines.append(f"- **{domain}** ({created}, #{channel}): {summary}")
+        lines.append("")
+        lines.append("Use this context to continue prior work. These are summaries of past conversations relevant to your current task.")
+        context_block = "\n".join(lines) + "\n\n"
 
     history_block = ""
     if thread_history:
@@ -100,8 +115,7 @@ Your team has taught you conventions, preferences, and rules over time. You're a
 
 {memory_block}
 
-{history_block}
-## Current Task
+{context_block}{history_block}## Current Task
 {task}
 
 ### How to respond

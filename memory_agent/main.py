@@ -2,10 +2,7 @@
 Memory Agent API — FastAPI service.
 Endpoints: /session_init, /ask, /teach, /stats
 """
-import os
-import sys
 import structlog
-from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -20,11 +17,15 @@ class SessionInitRequest(BaseModel):
     task: str
     role: str = ""
     max_rules: int = Field(default=10, ge=1, le=30)
+    channel: str = ""  # Slack channel for conversation context scoping
+    include_contexts: bool = True  # include conversation context summaries
 
 class SessionInitResponse(BaseModel):
     memories: list[dict]
+    contexts: list[dict] = []  # conversation context summaries
     context_prompt: str
     memory_count: int
+    context_count: int = 0
 
 class AskRequest(BaseModel):
     task: str
@@ -69,8 +70,7 @@ router: LLMRouter | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global store, router
-    data_dir = os.environ.get("LOOM_DATA_DIR", str(Path.home() / ".loom-agent"))
-    store = MemoryStore(data_dir=Path(data_dir))
+    store = MemoryStore()
     router = LLMRouter()
     logger.info("memory_agent_started", backend=store.stats()["backend"])
     yield
@@ -88,19 +88,31 @@ app = FastAPI(
 
 @app.post("/session_init", response_model=SessionInitResponse)
 async def session_init(req: SessionInitRequest):
-    """Load relevant memories and build context for a new task."""
+    """Load relevant memories and conversation context for a new task."""
     if store is None:
         raise HTTPException(500, "Store not initialized")
 
-    memories = store.get_context(task=req.task, role=req.role, max_rules=req.max_rules)
-    context_prompt = build_system_prompt(req.task, memories, req.role)
+    if req.include_contexts:
+        result = store.get_context_with_conversations(
+            task=req.task, role=req.role, max_rules=req.max_rules,
+            channel=req.channel, max_contexts=3,
+        )
+        memories = result["memories"]
+        contexts = result["contexts"]
+    else:
+        memories = store.get_context(task=req.task, role=req.role, max_rules=req.max_rules)
+        contexts = []
+
+    context_prompt = build_system_prompt(req.task, memories, req.role, contexts=contexts)
 
     return SessionInitResponse(
         memories=[{"id": m.id, "domain": m.domain, "rule_type": m.rule_type,
                     "rule": m.rule, "confidence": m.confidence}
                   for m in memories],
+        contexts=contexts,
         context_prompt=context_prompt,
         memory_count=len(memories),
+        context_count=len(contexts),
     )
 
 

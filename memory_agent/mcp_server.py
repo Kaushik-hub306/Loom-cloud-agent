@@ -86,7 +86,54 @@ def get_rules(task: str = "", domain: str = "", min_confidence: int = 5, limit: 
     return rules
 
 
-def format_rules_for_prompt(rules: list, task: str = "") -> str:
+def get_contexts(query: str = "", channel: str = "", limit: int = 3) -> list[dict]:
+    """Load conversation context summaries from Supabase. Semantic search with recency weighting."""
+    db_url = os.environ.get("LOOM_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not db_url:
+        return []
+
+    conn = psycopg2.connect(db_url)
+    cur = conn.cursor()
+
+    results = []
+    try:
+        from litellm import embedding
+        result = embedding(model="gemini/text-embedding-004", input=[query[:3000] or "recent"])
+        vec = json.dumps(result.data[0]["embedding"])
+        sql = """
+            SELECT channel, thread_ts, summary, domain, message_count,
+                   participants, created_at,
+                   (1.0 - (embedding <=> %s::vector))
+                   * EXP(EXTRACT(EPOCH FROM (created_at - NOW())) / 86400.0
+                         * LN(2) / 10.0) AS score
+            FROM conversation_contexts
+            WHERE embedding IS NOT NULL
+              AND expires_at > NOW()
+        """
+        params = [vec]
+        if channel:
+            sql += " AND channel = %s"
+            params.append(channel)
+        sql += " ORDER BY score DESC LIMIT %s"
+        params.append(limit)
+
+        cur.execute(sql, params)
+        for row in cur.fetchall():
+            results.append({
+                "channel": row[0], "thread_ts": row[1], "summary": row[2],
+                "domain": row[3], "message_count": row[4],
+                "participants": row[5] or [],
+                "created_at": row[6].isoformat() if hasattr(row[6], 'isoformat') else str(row[6]),
+            })
+    except Exception:
+        pass  # embedding failed — skip context, rules still work
+
+    cur.close()
+    conn.close()
+    return results
+
+
+def format_rules_for_prompt(rules: list, task: str = "", contexts: list[dict] | None = None) -> str:
     """Format rules into a system prompt block Claude Code reads."""
     if not rules:
         return ""
@@ -96,6 +143,18 @@ def format_rules_for_prompt(rules: list, task: str = "") -> str:
         by_domain.setdefault(r["domain"], []).append(r)
 
     lines = ["## Team Conventions (shared memory)", ""]
+
+    # Conversation context block (injected before rules — more actionable)
+    if contexts:
+        lines.append("### Recent Context")
+        for ctx in contexts:
+            domain = ctx.get("domain", "general")
+            summary = ctx.get("summary", "")
+            created = ctx.get("created_at", "")[:10] if ctx.get("created_at") else ""
+            channel = ctx.get("channel", "")
+            lines.append(f"- **{domain}** ({created}, #{channel}): {summary}")
+        lines.append("")
+
     lines.append(f"Loaded {len(rules)} relevant conventions. Follow these rules.")
     lines.append("")
 
@@ -153,17 +212,21 @@ def handle_request(request: dict) -> dict | None:
                 "tools": [
                     {
                         "name": "session_init",
-                        "description": "Load team conventions and rules before starting a coding session. Call this FIRST. Returns formatted context to include in your system prompt.",
+                        "description": "Load team conventions AND conversation context before starting a session. Call this FIRST. Returns formatted rules + recent conversation summaries from Loom's shared memory.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "task": {
                                     "type": "string",
-                                    "description": "What you're about to work on. Used to find relevant conventions."
+                                    "description": "What you're about to work on. Used to find relevant conventions and conversation context."
                                 },
                                 "domain": {
                                     "type": "string",
                                     "description": "Optional: filter by domain (coding, architecture, security, testing, etc.)"
+                                },
+                                "channel": {
+                                    "type": "string",
+                                    "description": "Optional: Slack channel to scope conversation context"
                                 }
                             },
                             "required": ["task"]
@@ -171,17 +234,21 @@ def handle_request(request: dict) -> dict | None:
                     },
                     {
                         "name": "recall_relevant",
-                        "description": "Search team memory for specific conventions, patterns, or decisions.",
+                        "description": "Search team memory for specific conventions AND past conversation context.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "query": {
                                     "type": "string",
-                                    "description": "What to search for. Returns matching rules sorted by relevance."
+                                    "description": "What to search for. Returns matching rules + conversation context sorted by relevance."
                                 },
                                 "domain": {
                                     "type": "string",
                                     "description": "Optional: filter by domain"
+                                },
+                                "channel": {
+                                    "type": "string",
+                                    "description": "Optional: Slack channel to scope conversation context"
                                 }
                             },
                             "required": ["query"]
@@ -214,19 +281,27 @@ def handle_request(request: dict) -> dict | None:
         if tool_name == "session_init":
             task = arguments.get("task", "")
             domain = arguments.get("domain", "")
+            channel = arguments.get("channel", "")
             rules = get_rules(task=task, domain=domain)
-            text = format_rules_for_prompt(rules, task)
+            contexts = get_contexts(query=task, channel=channel, limit=3)
+            text = format_rules_for_prompt(rules, task, contexts=contexts)
             if not text:
                 text = f"No team conventions found for '{task}'. Teach some in Slack with /teach!"
 
         elif tool_name == "recall_relevant":
             query = arguments.get("query", "")
             domain = arguments.get("domain", "")
+            channel = arguments.get("channel", "")
             rules = get_rules(task=query, domain=domain)
-            if not rules:
+            contexts = get_contexts(query=query, channel=channel, limit=3)
+            if not rules and not contexts:
                 text = f"No results for '{query}'. Try /teach in Slack to add conventions."
             else:
-                lines = [f"## Found {len(rules)} conventions", ""]
+                lines = [f"## Found {len(rules)} conventions + {len(contexts)} context(s)", ""]
+                if contexts:
+                    for c in contexts:
+                        lines.append(f"💬 [{c['domain']}] {c['summary']}")
+                    lines.append("")
                 for r in rules:
                     lines.append(f"- [{r['confidence']}/10] [{r['domain']}] {r['rule']}")
                 text = "\n".join(lines)
@@ -260,8 +335,10 @@ def handle_request(request: dict) -> dict | None:
 
 def main():
     """MCP stdio loop."""
+    silent = os.environ.get("LOOM_SILENT", "").lower() in ("1", "true", "yes")
     print("[loom-mcp] Starting MCP server...", file=sys.stderr)
     print(f"[loom-mcp] DB: {'connected' if os.environ.get('LOOM_DATABASE_URL') or os.environ.get('DATABASE_URL') else 'not set'}", file=sys.stderr)
+    print(f"[loom-mcp] Contexts: enabled | Silent: {'ON (no responses)' if silent else 'OFF (responds normally)'}", file=sys.stderr)
 
     for line in sys.stdin:
         line = line.strip()
