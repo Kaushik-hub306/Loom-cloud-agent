@@ -500,6 +500,7 @@ async def handle_all_messages(event, say, client):
     is_dm = event.get("channel_type") == "im"
     is_bot = bool(event.get("bot_id"))
 
+    print(f"[MSG] channel={channel} is_dm={is_dm} is_bot={is_bot} text={text[:60]} silent={SILENT_MODE}", file=sys.stderr, flush=True)
     # ── Silent mode: capture everything, never respond ──
     if SILENT_MODE:
         if text:
