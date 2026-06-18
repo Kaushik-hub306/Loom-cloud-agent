@@ -95,21 +95,25 @@ async def _silent_capture(channel: str, thread_ts: str, user_msg: str,
 
     # Fire gatekeeper after 3-minute lull (async, don't block)
     async def _delayed_eval(capture_channel, capture_ts, eval_at):
-        await asyncio.sleep(180)  # 3 minutes
+        await asyncio.sleep(20)  # 20 seconds for testing
         buf_entry = _silent_buffer.get(capture_channel)
         if not buf_entry:
+            print(f"[EVAL] no buffer entry for {capture_channel}", file=sys.stderr, flush=True)
             return
-        # Only evaluate if no new messages arrived during the wait
+        print(f"[EVAL] last_msg={buf_entry['last_msg_time']} eval_at={eval_at} msgs={len(buf_entry['messages'])}", file=sys.stderr, flush=True)
         if buf_entry["last_msg_time"] <= eval_at:
             msgs = list(buf_entry["messages"])
-            await evaluate_conversation_context(
+            print(f"[EVAL] firing gatekeeper with {len(msgs)} messages", file=sys.stderr, flush=True)
+            result = await evaluate_conversation_context(
                 messages=msgs,
                 channel=capture_channel,
                 thread_ts=capture_ts,
             )
-            # Rotate buffer after evaluation
+            print(f"[EVAL] result={result}", file=sys.stderr, flush=True)
             if capture_channel in _silent_buffer:
                 _silent_buffer[capture_channel]["messages"] = []
+        else:
+            print(f"[EVAL] skipped — messages still arriving", file=sys.stderr, flush=True)
 
     asyncio.create_task(_delayed_eval(channel, thread_ts, now))
 
