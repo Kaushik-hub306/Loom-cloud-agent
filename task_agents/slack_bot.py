@@ -26,6 +26,15 @@ SILENT_MODE = os.environ.get("LOOM_SILENT", "").lower() in ("1", "true", "yes")
 
 app = AsyncApp(token=SLACK_BOT_TOKEN)
 
+# ── Debug middleware: log every event ───────────────────────
+@app.middleware
+async def debug_all_events(req, next):
+    """Log all incoming events to stderr."""
+    body = req.body if hasattr(req, 'body') else {}
+    etype = body.get("event", {}).get("type", "unknown") if isinstance(body, dict) else "unknown"
+    print(f"[DEBUG] event_type={etype} payload_keys={list(body.keys()) if isinstance(body, dict) else 'N/A'}", file=sys.stderr, flush=True)
+    return await next(req)
+
 # ── Memory Agent client ────────────────────────────────────
 
 class MemoryAgentClient:
