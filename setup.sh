@@ -138,6 +138,47 @@ else
 fi
 echo ""
 
+# ── Step 4.5: LLM API key ──────────────────────────────────────────
+
+echo -e "${BOLD}Step 4.5/5: LLM API key${RESET}"
+echo ""
+echo "Loom uses an LLM to read conversations and decide what to remember."
+echo "Without a key, the memory feature silently does nothing."
+echo ""
+echo "  deepseek — cheapest ($0.14/M tokens, get key: platform.deepseek.com/api_keys)"
+echo "  gemini   — free tier (get key: aistudio.google.com/apikey)"
+echo "  claude   — most capable (get key: console.anthropic.com)"
+echo ""
+
+read -p "Provider (deepseek/gemini/claude/skip): " LLM_PROVIDER
+
+if [ "$LLM_PROVIDER" = "skip" ] || [ -z "$LLM_PROVIDER" ]; then
+    echo -e "${YELLOW}⚠ No LLM key provided. Add it to .env later or memory won't work.${RESET}"
+    LLM_PROVIDER=""
+else
+    read -p "Paste your $LLM_PROVIDER API key: " LLM_API_KEY
+    case "$LLM_PROVIDER" in
+        deepseek)
+            export DEEPSEEK_API_KEY="$LLM_API_KEY"
+            export LOOM_LLM_MODEL="deepseek"
+            ;;
+        gemini)
+            export GEMINI_API_KEY="$LLM_API_KEY"
+            export LOOM_LLM_MODEL="gemini"
+            ;;
+        claude)
+            export ANTHROPIC_API_KEY="$LLM_API_KEY"
+            export LOOM_LLM_MODEL="claude"
+            ;;
+        *)
+            echo -e "${YELLOW}Unknown. Add manually to .env.${RESET}"
+            LLM_PROVIDER=""
+            ;;
+    esac
+    [ -n "$LLM_PROVIDER" ] && echo -e "${GREEN}✓ $LLM_PROVIDER configured${RESET}"
+fi
+echo ""
+
 # ── Step 5: Generate MCP config ───────────────────────────────────────
 
 echo -e "${BOLD}Step 5/5: MCP config for Cursor / Claude Code${RESET}"
@@ -300,4 +341,12 @@ if [ -n "$SLACK_BOT_TOKEN" ]; then
     echo "export SLACK_APP_TOKEN=$SLACK_APP_TOKEN" >> "$ENV_FILE"
 fi
 echo "export LOOM_SILENT=true" >> "$ENV_FILE"
+if [ -n "$LOOM_LLM_MODEL" ]; then
+    echo "export LOOM_LLM_MODEL=$LOOM_LLM_MODEL" >> "$ENV_FILE"
+    case "$LOOM_LLM_MODEL" in
+        deepseek) echo "export DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" >> "$ENV_FILE" ;;
+        gemini)   echo "export GEMINI_API_KEY=$GEMINI_API_KEY" >> "$ENV_FILE" ;;
+        claude)   echo "export ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$ENV_FILE" ;;
+    esac
+fi
 echo -e "${GREEN}✓ Environment saved to $ENV_FILE${RESET}"
