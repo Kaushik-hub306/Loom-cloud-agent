@@ -12,6 +12,8 @@ import httpx
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
+from memory_agent.memory import MemoryStore
+
 
 MEMORY_AGENT_URL = os.environ.get("MEMORY_AGENT_URL", "http://localhost:8000")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
