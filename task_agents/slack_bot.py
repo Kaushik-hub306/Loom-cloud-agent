@@ -492,18 +492,27 @@ async def handle_dismiss(ack, body, client):
 
 
 @app.event("message")
-async def handle_dm(event, say, client):
-    """Handle DMs conversationally. In silent mode: capture only, don't respond."""
-    if event.get("channel_type") != "im":
-        return  # not a DM — handled by handle_silent_listener
+async def handle_all_messages(event, say, client):
+    """Handle ALL messages: DMs, channel messages, silent capture."""
+    channel = event.get("channel", "")
+    ts = event.get("ts", "")
+    text = event.get("text", "").strip()
+    is_dm = event.get("channel_type") == "im"
+    is_bot = bool(event.get("bot_id"))
 
+    # ── Silent mode: capture everything, never respond ──
     if SILENT_MODE:
-        channel = event.get("channel", "")
-        thread_ts = event.get("ts", "")
-        await _silent_capture(channel, thread_ts, user_msg=event.get("text", ""))
+        if text:
+            user_msg = text if not is_bot else ""
+            bot_msg = text if is_bot else ""
+            await _silent_capture(channel, ts, user_msg=user_msg, bot_msg=bot_msg)
         return
 
-    user_message = event.get("text", "")
+    # ── Interactive mode ──
+    if not is_dm:
+        return  # only respond to DMs in interactive mode
+
+    user_message = text
     channel = event.get("channel", "")
     thread_ts = event.get("ts", "")
 
@@ -608,32 +617,6 @@ async def handle_teach(ack, command, respond):
         await respond(f"✓ Taught! `{domain}/{rule_type}` — confidence {result['confidence']}/10")
     except Exception as e:
         await respond(f"Failed: {e}")
-
-
-@app.event("message")
-async def handle_silent_listener(event, client):
-    """Silent mode: capture all channel messages for Loom context storage.
-    Never responds — Cursor is the only bot the user talks to."""
-    if not SILENT_MODE:
-        return
-
-    # Skip DMs (handled by handle_dm), bot messages, and messages without text
-    if event.get("channel_type") == "im":
-        return
-    text = event.get("text", "").strip()
-    if not text:
-        return
-
-    channel = event.get("channel", "")
-    thread_ts = event.get("thread_ts") or event.get("ts", "")
-    bot_id = event.get("bot_id")  # None for human users
-
-    # Capture user messages directly. Bot messages (Cursor's responses)
-    # are captured too but marked as assistant role.
-    if bot_id:
-        await _silent_capture(channel, thread_ts, "", bot_msg=text)
-    else:
-        await _silent_capture(channel, thread_ts, user_msg=text)
 
 
 @app.command("/stats")
