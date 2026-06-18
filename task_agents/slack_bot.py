@@ -28,6 +28,18 @@ SILENT_MODE = os.environ.get("LOOM_SILENT", "").lower() in ("1", "true", "yes")
 
 app = AsyncApp(token=SLACK_BOT_TOKEN)
 
+# ── Debug middleware: log every incoming Slack event ───────
+@app.middleware
+async def debug_all_events(req, next):
+    """Log all incoming events to stderr so we can trace what Slack sends."""
+    body = req.body if hasattr(req, 'body') else {}
+    if isinstance(body, dict):
+        etype = body.get("event", {}).get("type", body.get("type", "unknown"))
+        channel = body.get("event", {}).get("channel", "-")
+        text = body.get("event", {}).get("text", "")[:50]
+        print(f"[EVENT] type={etype} channel={channel} text={text}", file=sys.stderr, flush=True)
+    return await next(req)
+
 # ── Memory Agent client ────────────────────────────────────
 
 class MemoryAgentClient:
@@ -355,6 +367,7 @@ async def handle_mention(event, say, client):
         text = event.get("text", "")
         if "<@" in text:
             text = text.split(">", 1)[1].strip() if ">" in text else text
+        print(f"[MSG] mention channel={channel} text={text[:60]} silent=True", file=sys.stderr, flush=True)
         await _silent_capture(channel, thread_ts, user_msg=text)
         return
 
