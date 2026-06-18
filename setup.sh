@@ -213,11 +213,11 @@ import psycopg2, os
 try:
     conn = psycopg2.connect(os.environ['LOOM_DATABASE_URL'])
     cur = conn.cursor()
-    cur.execute(\"SELECT COUNT(*) FROM rules;\")
+    cur.execute(\"SELECT COUNT(*) FROM memories;\")
     rules = cur.fetchone()[0]
     cur.execute(\"SELECT COUNT(*) FROM conversation_contexts;\")
     ctx_count = cur.fetchone()[0]
-    print(f'  ✓ Connected — {rules} rules, {ctx_count} context summaries')
+    print(f'  ✓ Connected — {rules} memories, {ctx_count} context summaries')
     cur.close()
     conn.close()
 except Exception as e:
