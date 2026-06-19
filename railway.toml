@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+
+[[services]]
+name = "loom-api"
+startCommand = "loom serve"
+
+[[services]]
+name = "loom-slack"
+startCommand = "loom slack"
