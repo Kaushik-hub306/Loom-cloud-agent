@@ -29,7 +29,7 @@ def get_rules(task: str = "", domain: str = "", min_confidence: int = 5, limit: 
             cur.execute("""
                 SELECT domain, rule_type, rule, example, confidence,
                        1 - (embedding <=> %s::vector) AS score
-                FROM rules
+                FROM memories
                 WHERE embedding IS NOT NULL AND confidence >= %s
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s;
@@ -41,7 +41,7 @@ def get_rules(task: str = "", domain: str = "", min_confidence: int = 5, limit: 
         if not rows:
             cur.execute("""
                 SELECT domain, rule_type, rule, example, confidence, 0.0
-                FROM rules
+                FROM memories
                 WHERE confidence >= %s
                   AND (LOWER(rule) LIKE %s OR LOWER(domain) LIKE %s OR LOWER(rule_type) LIKE %s)
                 ORDER BY confidence DESC LIMIT %s;
@@ -51,7 +51,7 @@ def get_rules(task: str = "", domain: str = "", min_confidence: int = 5, limit: 
         if not rows:
             cur.execute("""
                 SELECT domain, rule_type, rule, example, confidence, 0.0
-                FROM rules WHERE confidence >= %s
+                FROM memories WHERE confidence >= %s
                   AND domain IN ('coding','architecture','security','testing','process')
                 ORDER BY confidence DESC LIMIT %s;
             """, (min_confidence, limit))
@@ -59,14 +59,14 @@ def get_rules(task: str = "", domain: str = "", min_confidence: int = 5, limit: 
     elif domain:
         cur.execute("""
             SELECT domain, rule_type, rule, example, confidence, 0.0
-            FROM rules WHERE domain = %s AND confidence >= %s
+            FROM memories WHERE domain = %s AND confidence >= %s
             ORDER BY confidence DESC LIMIT %s;
         """, (domain, min_confidence, limit))
         rows = cur.fetchall()
     else:
         cur.execute("""
             SELECT domain, rule_type, rule, example, confidence, 0.0
-            FROM rules WHERE confidence >= %s
+            FROM memories WHERE confidence >= %s
             ORDER BY confidence DESC LIMIT %s;
         """, (min_confidence, limit))
         rows = cur.fetchall()

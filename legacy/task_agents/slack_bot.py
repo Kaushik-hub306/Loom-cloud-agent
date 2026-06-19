@@ -12,6 +12,8 @@ import httpx
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
+from memory_agent.memory import MemoryStore
+
 
 MEMORY_AGENT_URL = os.environ.get("MEMORY_AGENT_URL", "http://localhost:8000")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
@@ -25,6 +27,18 @@ DEFAULT_MODEL = os.environ.get("LOOM_LLM_MODEL", "deepseek")
 SILENT_MODE = os.environ.get("LOOM_SILENT", "").lower() in ("1", "true", "yes")
 
 app = AsyncApp(token=SLACK_BOT_TOKEN)
+
+# ── Debug middleware: log every incoming Slack event ───────
+@app.middleware
+async def debug_all_events(req, next):
+    """Log all incoming events to stderr so we can trace what Slack sends."""
+    body = req.body if hasattr(req, 'body') else {}
+    if isinstance(body, dict):
+        etype = body.get("event", {}).get("type", body.get("type", "unknown"))
+        channel = body.get("event", {}).get("channel", "-")
+        text = body.get("event", {}).get("text", "")[:50]
+        print(f"[EVENT] type={etype} channel={channel} text={text}", file=sys.stderr, flush=True)
+    return await next(req)
 
 # ── Memory Agent client ────────────────────────────────────
 
@@ -95,21 +109,25 @@ async def _silent_capture(channel: str, thread_ts: str, user_msg: str,
 
     # Fire gatekeeper after 3-minute lull (async, don't block)
     async def _delayed_eval(capture_channel, capture_ts, eval_at):
-        await asyncio.sleep(180)  # 3 minutes
+        await asyncio.sleep(20)  # 20 seconds for testing
         buf_entry = _silent_buffer.get(capture_channel)
         if not buf_entry:
+            print(f"[EVAL] no buffer entry for {capture_channel}", file=sys.stderr, flush=True)
             return
-        # Only evaluate if no new messages arrived during the wait
+        print(f"[EVAL] last_msg={buf_entry['last_msg_time']} eval_at={eval_at} msgs={len(buf_entry['messages'])}", file=sys.stderr, flush=True)
         if buf_entry["last_msg_time"] <= eval_at:
             msgs = list(buf_entry["messages"])
-            await evaluate_conversation_context(
+            print(f"[EVAL] firing gatekeeper with {len(msgs)} messages", file=sys.stderr, flush=True)
+            result = await evaluate_conversation_context(
                 messages=msgs,
                 channel=capture_channel,
                 thread_ts=capture_ts,
             )
-            # Rotate buffer after evaluation
+            print(f"[EVAL] result={result}", file=sys.stderr, flush=True)
             if capture_channel in _silent_buffer:
                 _silent_buffer[capture_channel]["messages"] = []
+        else:
+            print(f"[EVAL] skipped — messages still arriving", file=sys.stderr, flush=True)
 
     asyncio.create_task(_delayed_eval(channel, thread_ts, now))
 
@@ -349,6 +367,7 @@ async def handle_mention(event, say, client):
         text = event.get("text", "")
         if "<@" in text:
             text = text.split(">", 1)[1].strip() if ">" in text else text
+        print(f"[MSG] mention channel={channel} text={text[:60]} silent=True", file=sys.stderr, flush=True)
         await _silent_capture(channel, thread_ts, user_msg=text)
         return
 
@@ -492,18 +511,28 @@ async def handle_dismiss(ack, body, client):
 
 
 @app.event("message")
-async def handle_dm(event, say, client):
-    """Handle DMs conversationally. In silent mode: capture only, don't respond."""
-    if event.get("channel_type") != "im":
-        return  # not a DM — handled by handle_silent_listener
+async def handle_all_messages(event, say, client):
+    """Handle ALL messages: DMs, channel messages, silent capture."""
+    channel = event.get("channel", "")
+    ts = event.get("ts", "")
+    text = event.get("text", "").strip()
+    is_dm = event.get("channel_type") == "im"
+    is_bot = bool(event.get("bot_id"))
 
+    print(f"[MSG] channel={channel} is_dm={is_dm} is_bot={is_bot} text={text[:60]} silent={SILENT_MODE}", file=sys.stderr, flush=True)
+    # ── Silent mode: capture everything, never respond ──
     if SILENT_MODE:
-        channel = event.get("channel", "")
-        thread_ts = event.get("ts", "")
-        await _silent_capture(channel, thread_ts, user_msg=event.get("text", ""))
+        if text:
+            user_msg = text if not is_bot else ""
+            bot_msg = text if is_bot else ""
+            await _silent_capture(channel, ts, user_msg=user_msg, bot_msg=bot_msg)
         return
 
-    user_message = event.get("text", "")
+    # ── Interactive mode ──
+    if not is_dm:
+        return  # only respond to DMs in interactive mode
+
+    user_message = text
     channel = event.get("channel", "")
     thread_ts = event.get("ts", "")
 
@@ -608,32 +637,6 @@ async def handle_teach(ack, command, respond):
         await respond(f"✓ Taught! `{domain}/{rule_type}` — confidence {result['confidence']}/10")
     except Exception as e:
         await respond(f"Failed: {e}")
-
-
-@app.event("message")
-async def handle_silent_listener(event, client):
-    """Silent mode: capture all channel messages for Loom context storage.
-    Never responds — Cursor is the only bot the user talks to."""
-    if not SILENT_MODE:
-        return
-
-    # Skip DMs (handled by handle_dm), bot messages, and messages without text
-    if event.get("channel_type") == "im":
-        return
-    text = event.get("text", "").strip()
-    if not text:
-        return
-
-    channel = event.get("channel", "")
-    thread_ts = event.get("thread_ts") or event.get("ts", "")
-    bot_id = event.get("bot_id")  # None for human users
-
-    # Capture user messages directly. Bot messages (Cursor's responses)
-    # are captured too but marked as assistant role.
-    if bot_id:
-        await _silent_capture(channel, thread_ts, "", bot_msg=text)
-    else:
-        await _silent_capture(channel, thread_ts, user_msg=text)
 
 
 @app.command("/stats")

@@ -138,6 +138,47 @@ else
 fi
 echo ""
 
+# ── Step 4.5: LLM API key ──────────────────────────────────────────
+
+echo -e "${BOLD}Step 4.5/5: LLM API key${RESET}"
+echo ""
+echo "Loom uses an LLM to read conversations and decide what to remember."
+echo "Without a key, the memory feature silently does nothing."
+echo ""
+echo "  deepseek — cheapest ($0.14/M tokens, get key: platform.deepseek.com/api_keys)"
+echo "  gemini   — free tier (get key: aistudio.google.com/apikey)"
+echo "  claude   — most capable (get key: console.anthropic.com)"
+echo ""
+
+read -p "Provider (deepseek/gemini/claude/skip): " LLM_PROVIDER
+
+if [ "$LLM_PROVIDER" = "skip" ] || [ -z "$LLM_PROVIDER" ]; then
+    echo -e "${YELLOW}⚠ No LLM key provided. Add it to .env later or memory won't work.${RESET}"
+    LLM_PROVIDER=""
+else
+    read -p "Paste your $LLM_PROVIDER API key: " LLM_API_KEY
+    case "$LLM_PROVIDER" in
+        deepseek)
+            export DEEPSEEK_API_KEY="$LLM_API_KEY"
+            export LOOM_LLM_MODEL="deepseek"
+            ;;
+        gemini)
+            export GEMINI_API_KEY="$LLM_API_KEY"
+            export LOOM_LLM_MODEL="gemini"
+            ;;
+        claude)
+            export ANTHROPIC_API_KEY="$LLM_API_KEY"
+            export LOOM_LLM_MODEL="claude"
+            ;;
+        *)
+            echo -e "${YELLOW}Unknown. Add manually to .env.${RESET}"
+            LLM_PROVIDER=""
+            ;;
+    esac
+    [ -n "$LLM_PROVIDER" ] && echo -e "${GREEN}✓ $LLM_PROVIDER configured${RESET}"
+fi
+echo ""
+
 # ── Step 5: Generate MCP config ───────────────────────────────────────
 
 echo -e "${BOLD}Step 5/5: MCP config for Cursor / Claude Code${RESET}"
@@ -172,11 +213,11 @@ import psycopg2, os
 try:
     conn = psycopg2.connect(os.environ['LOOM_DATABASE_URL'])
     cur = conn.cursor()
-    cur.execute(\"SELECT COUNT(*) FROM rules;\")
+    cur.execute(\"SELECT COUNT(*) FROM memories;\")
     rules = cur.fetchone()[0]
     cur.execute(\"SELECT COUNT(*) FROM conversation_contexts;\")
     ctx_count = cur.fetchone()[0]
-    print(f'  ✓ Connected — {rules} rules, {ctx_count} context summaries')
+    print(f'  ✓ Connected — {rules} memories, {ctx_count} context summaries')
     cur.close()
     conn.close()
 except Exception as e:
@@ -190,46 +231,122 @@ echo -e "${BOLD}============================================${RESET}"
 echo -e "${GREEN}${BOLD}   Setup complete!${RESET}"
 echo -e "${BOLD}============================================${RESET}"
 echo ""
-echo -e "${BOLD}Next steps:${RESET}"
+
+# Detect which tools the user has installed
+HAS_CURSOR=false
+HAS_CLAUDE_CODE=false
+HAS_CLAUDE_DESKTOP=false
+[ -d "/Applications/Cursor.app" ] && HAS_CURSOR=true
+[ -f "$HOME/.claude/settings.json" ] && HAS_CLAUDE_CODE=true
+[ -f "$HOME/Library/Application Support/Claude/claude_desktop_config.json" ] && HAS_CLAUDE_DESKTOP=true
+
+# Show the actual MCP config content
+echo -e "${BOLD}Your MCP config (save this):${RESET}"
 echo ""
-echo -e "  ${BOLD}1. Add Loom to Cursor / Claude Code:${RESET}"
+echo -e "${BLUE}────────────────────────────────────────────${RESET}"
+cat "$CONFIG_FILE"
+echo -e "${BLUE}────────────────────────────────────────────${RESET}"
 echo ""
-echo "     Add this to your MCP config:"
+
+echo -e "${BOLD}Now add it to your AI tool:${RESET}"
 echo ""
-echo -e "     ${BLUE}$CONFIG_FILE${RESET}"
-echo ""
-echo "     Or for Claude Desktop:"
-echo "     Paste the JSON into ~/Library/Application Support/Claude/claude_desktop_config.json"
-echo ""
-echo -e "  ${BOLD}2. Deploy Slack bot (optional):${RESET}"
+
+if $HAS_CURSOR; then
+    echo -e "  ${BOLD}Cursor IDE (detected):${RESET}"
+    echo "    1. Open Cursor"
+    echo "    2. In your project, create or open .cursor/mcp.json"
+    echo "    3. Paste the JSON above into that file"
+    echo "    4. Restart Cursor"
+    echo ""
+fi
+
+if $HAS_CLAUDE_CODE; then
+    echo -e "  ${BOLD}Claude Code (detected):${RESET}"
+    echo "    Run this command:"
+    echo ""
+    echo -e "    ${GREEN}cat $CONFIG_FILE >> ~/.claude/settings.json${RESET}"
+    echo "    Then restart Claude Code."
+    echo ""
+fi
+
+if $HAS_CLAUDE_DESKTOP; then
+    echo -e "  ${BOLD}Claude Desktop (detected):${RESET}"
+    echo "    1. Open: ~/Library/Application Support/Claude/claude_desktop_config.json"
+    echo "    2. Add the 'loom' block from the JSON above into the 'mcpServers' section"
+    echo "    3. Restart Claude Desktop"
+    echo ""
+fi
+
+if ! $HAS_CURSOR && ! $HAS_CLAUDE_CODE && ! $HAS_CLAUDE_DESKTOP; then
+    echo -e "  ${YELLOW}No AI tools detected on this machine.${RESET}"
+    echo "  Copy the JSON above into your tool's MCP config:"
+    echo ""
+    echo "  Cursor IDE:       .cursor/mcp.json in your project"
+    echo "  Claude Code:      ~/.claude/settings.json"
+    echo "  Claude Desktop:   ~/Library/Application Support/Claude/claude_desktop_config.json"
+    echo "  Codex CLI:        ~/.codex/config.toml or ~/.codex/config.json"
+    echo ""
+fi
+
+echo -e "  ${BOLD}2. Start the Slack listener:${RESET}"
 echo ""
 
 if [ "$SETUP_SLACK" = "y" ] || [ "$SETUP_SLACK" = "Y" ]; then
-    echo -e "     ${YELLOW}Local:${RESET}  python3 run.py"
-    echo -e "     ${YELLOW}Railway:${RESET} Push to GitHub → Deploy on railway.app (free tier)"
-    echo "     Set LOOM_SILENT=true if Cursor is your primary bot"
+    echo -e "     ${YELLOW}Locally (your Mac, right now):${RESET}"
+    echo "       cd $SCRIPT_DIR"
+    echo "       source .env"
+    echo "       python3 run.py"
+    echo ""
+    echo "     This starts the Slack bot. It connects to your workspace"
+    echo "     and reads messages in channels where you /invite'd it."
+    echo "     It runs as long as this terminal stays open."
+    echo ""
+    echo -e "     ${YELLOW}24/7 on Railway (free):${RESET}"
+    echo "       1. Push this repo to your GitHub"
+    echo "       2. railway.app → New Project → Deploy from GitHub"
+    echo "       3. Add env vars: DATABASE_URL, SLACK_BOT_TOKEN, SLACK_APP_TOKEN, LOOM_SILENT=true"
+    echo "       4. Deploy. Always on, even when your Mac is asleep."
+    echo ""
+    echo -e "     ${YELLOW}Invite the bot to channels:${RESET}"
+    echo "       In Slack: /invite @Loom Memory"
+    echo "       Do this in every channel where you talk to Cursor."
 else
-    echo "     Run setup again and choose 'y' for Slack setup."
+    echo "     You skipped Slack setup. The MCP server still works."
+    echo "     Re-run setup.sh and choose 'y' if you want Slack later."
 fi
 
 echo ""
 echo -e "  ${BOLD}3. Verify it works:${RESET}"
 echo ""
-echo "     Start Cursor/Claude Code → first tool call auto-loads Loom context."
-echo "     You'll see '<!-- LOOM:AUTO_CONTEXT -->' in the system prompt."
+echo "     Open Cursor / Claude Code. Start a new conversation."
+echo "     First tool call auto-loads Loom context."
+echo "     You'll see this in the system prompt:"
+echo ""
+echo -e "     ${BLUE}<!-- LOOM:AUTO_CONTEXT -->${RESET}"
+echo "     ## Relevant Conventions (from Loom)"
+echo ""
+echo -e "     ${BOLD}To teach a convention:${RESET}"
+echo '       Type: "teach coding:convention Use type hints on all public functions"'
 echo ""
 
-# Save env vars for future sessions
-ENV_FILE="$MCP_DIR/.env"
+# ── Save .env ───────────────────────────────────────────────────────
+
+ENV_FILE="$SCRIPT_DIR/.env"
 cat > "$ENV_FILE" << EOF
-LOOM_DATABASE_URL=$DB_URL
+export LOOM_DATABASE_URL=$DB_URL
+export DATABASE_URL=$DB_URL
 EOF
 if [ -n "$SLACK_BOT_TOKEN" ]; then
-    echo "SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN" >> "$ENV_FILE"
-    echo "SLACK_APP_TOKEN=$SLACK_APP_TOKEN" >> "$ENV_FILE"
+    echo "export SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN" >> "$ENV_FILE"
+    echo "export SLACK_APP_TOKEN=$SLACK_APP_TOKEN" >> "$ENV_FILE"
 fi
-echo "LOOM_SILENT=true" >> "$ENV_FILE"
+echo "export LOOM_SILENT=true" >> "$ENV_FILE"
+if [ -n "$LOOM_LLM_MODEL" ]; then
+    echo "export LOOM_LLM_MODEL=$LOOM_LLM_MODEL" >> "$ENV_FILE"
+    case "$LOOM_LLM_MODEL" in
+        deepseek) echo "export DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" >> "$ENV_FILE" ;;
+        gemini)   echo "export GEMINI_API_KEY=$GEMINI_API_KEY" >> "$ENV_FILE" ;;
+        claude)   echo "export ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$ENV_FILE" ;;
+    esac
+fi
 echo -e "${GREEN}✓ Environment saved to $ENV_FILE${RESET}"
-echo ""
-echo -e "Source it: ${BOLD}source .env${RESET}"
-echo ""

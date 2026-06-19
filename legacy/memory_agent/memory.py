@@ -80,7 +80,7 @@ class MemoryStore:
             cur.execute("""
                 SELECT id, domain, rule_type, rule, example, confidence, sources,
                        1 - (embedding <=> %s::vector) AS similarity
-                FROM rules
+                FROM memories
                 WHERE embedding IS NOT NULL
                   AND confidence >= %s
                 ORDER BY embedding <=> %s::vector
@@ -90,7 +90,7 @@ class MemoryStore:
             # Fallback: text search
             cur.execute("""
                 SELECT id, domain, rule_type, rule, example, confidence, sources, 0.0
-                FROM rules
+                FROM memories
                 WHERE (LOWER(rule) LIKE %s OR LOWER(domain) LIKE %s)
                   AND confidence >= %s
                 ORDER BY confidence DESC
@@ -170,18 +170,18 @@ class MemoryStore:
 
         # Upsert: insert or bump confidence
         cur.execute("""
-            INSERT INTO rules (id, domain, rule_type, rule, example, confidence,
+            INSERT INTO memories (id, domain, rule_type, rule, example, confidence,
                                sources, source_type, embedding, project)
             VALUES (%s, %s, %s, %s, %s, %s, '[]', 'user_teach', %s::vector, 'loom-agent')
             ON CONFLICT (id) DO UPDATE SET
-                confidence = LEAST(10, rules.confidence + 1),
+                confidence = LEAST(10, memories.confidence + 1),
                 updated_at = NOW(),
-                embedding = COALESCE(EXCLUDED.embedding, rules.embedding);
+                embedding = COALESCE(EXCLUDED.embedding, memories.embedding);
         """, (rule_id, domain, rule_type, rule.strip(), example, confidence,
               json.dumps(embedding) if embedding else None))
 
         # Get final state
-        cur.execute("SELECT id, confidence FROM rules WHERE id = %s;", (rule_id,))
+        cur.execute("SELECT id, confidence FROM memories WHERE id = %s;", (rule_id,))
         row = cur.fetchone()
         cur.close()
 
@@ -355,7 +355,7 @@ class MemoryStore:
 
     def stats(self) -> dict:
         cur = self._conn.cursor()
-        cur.execute("SELECT COUNT(*), domain FROM rules GROUP BY domain;")
+        cur.execute("SELECT COUNT(*), domain FROM memories GROUP BY domain;")
         rows = cur.fetchall()
         domains = {r[1]: r[0] for r in rows}
         total = sum(domains.values())
