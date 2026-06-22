@@ -157,6 +157,16 @@ class LoomConfig:
     # ------------------------------------------------------------------
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> LoomConfig:
+        if environ is None:
+            # Load a local .env file (if present) into the process environment.
+            # Existing real environment variables always win over .env values.
+            # Tests pass an explicit ``environ`` and so stay hermetic.
+            try:
+                from dotenv import load_dotenv
+
+                load_dotenv()
+            except ImportError:
+                logger.debug("dotenv_not_installed_skipping_env_file")
         env = environ if environ is not None else dict(os.environ)
         errors: list[str] = []
 
