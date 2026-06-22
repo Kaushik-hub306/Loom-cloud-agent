@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+# Generated MCP config contains the DB connection string (secret).
+loom-mcp.json
 __pycache__/
 *.py[cod]
 .pytest_cache/
