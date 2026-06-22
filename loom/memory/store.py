@@ -152,54 +152,30 @@ class MemoryStore:
         embedding_pg = vector_to_pg(embedding)
         sources_json = json.dumps(sources)
 
-        existing = await self.pool.fetchrow(
-            "SELECT * FROM memories WHERE id = $1", memory_id
+        row = await self.pool.fetchrow(
+            """
+            INSERT INTO memories
+                (id, domain, rule_type, rule, example, confidence, uses,
+                 sources, source_type, embedding, project)
+            VALUES ($1,$2,$3,$4,$5,$6,0,$7::jsonb,$8,$9::vector,$10)
+            ON CONFLICT (id) DO UPDATE
+            SET rule = EXCLUDED.rule,
+                example = EXCLUDED.example,
+                source_type = EXCLUDED.source_type,
+                sources = EXCLUDED.sources,
+                confidence = LEAST(
+                    10,
+                    GREATEST(memories.confidence, EXCLUDED.confidence) + 1
+                ),
+                embedding = COALESCE(EXCLUDED.embedding, memories.embedding)
+            RETURNING memories.*, (xmax = '0'::xid) AS inserted
+            """,
+            memory_id, domain_norm, rule_type_norm, rule_s, example_s,
+            int(confidence), sources_json, source_type, embedding_pg, project,
         )
-
-        if existing is None:
-            row = await self.pool.fetchrow(
-                """
-                INSERT INTO memories
-                    (id, domain, rule_type, rule, example, confidence, uses,
-                     sources, source_type, embedding, project)
-                VALUES ($1,$2,$3,$4,$5,$6,0,$7::jsonb,$8,$9::vector,$10)
-                RETURNING *
-                """,
-                memory_id, domain_norm, rule_type_norm, rule_s, example_s,
-                int(confidence), sources_json, source_type, embedding_pg, project,
-            )
-            logger.info("memory_taught", memory_id=memory_id, is_update=False)
-            return TeachResult(memory=self._row_to_memory(row), is_update=False)
-
-        existing_conf = existing["confidence"]
-        new_confidence = min(10, max(existing_conf, int(confidence)) + 1)
-
-        if embedding_pg is not None:
-            row = await self.pool.fetchrow(
-                """
-                UPDATE memories
-                SET rule = $2, example = $3, source_type = $4, sources = $5::jsonb,
-                    confidence = $6, embedding = $7::vector
-                WHERE id = $1
-                RETURNING *
-                """,
-                memory_id, rule_s, example_s, source_type, sources_json,
-                new_confidence, embedding_pg,
-            )
-        else:
-            row = await self.pool.fetchrow(
-                """
-                UPDATE memories
-                SET rule = $2, example = $3, source_type = $4, sources = $5::jsonb,
-                    confidence = $6
-                WHERE id = $1
-                RETURNING *
-                """,
-                memory_id, rule_s, example_s, source_type, sources_json,
-                new_confidence,
-            )
-        logger.info("memory_taught", memory_id=memory_id, is_update=True)
-        return TeachResult(memory=self._row_to_memory(row), is_update=True)
+        is_update = not bool(row["inserted"])
+        logger.info("memory_taught", memory_id=memory_id, is_update=is_update)
+        return TeachResult(memory=self._row_to_memory(row), is_update=is_update)
 
     # ------------------------------------------------------------------
     # Recall
@@ -424,44 +400,51 @@ class MemoryStore:
             domain_norm = slugify(domain or "general", max_chars=50) or "general"
             participants = participants or []
 
-            if is_new_topic:
-                max_row = await self.pool.fetchrow(
-                    """
-                    SELECT COALESCE(MAX(topic_index), -1) AS max_idx
-                    FROM conversation_contexts
-                    WHERE workspace_id = $1 AND channel = $2 AND thread_ts = $3
-                    """,
-                    workspace_id, channel, thread_ts,
-                )
-                topic_index = int(max_row["max_idx"]) + 1
-            else:
-                topic_index = 0
-
-            context_id = md5_short(
-                f"{workspace_id}:{channel}:{thread_ts}:{topic_index}"
-            )
             embedding = await self.embeddings.embed(summary_s)
             embedding_pg = vector_to_pg(embedding)
 
-            await self.pool.execute(
-                """
-                INSERT INTO conversation_contexts
-                    (id, workspace_id, channel, thread_ts, topic_index, summary,
-                     embedding, domain, message_count, participants, expires_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7::vector,$8,$9,$10,
-                        NOW() + ($11 || ' days')::interval)
-                ON CONFLICT (workspace_id, channel, thread_ts, topic_index) DO UPDATE
-                SET summary = EXCLUDED.summary,
-                    embedding = EXCLUDED.embedding,
-                    domain = EXCLUDED.domain,
-                    message_count = EXCLUDED.message_count,
-                    participants = EXCLUDED.participants,
-                    expires_at = EXCLUDED.expires_at
-                """,
-                context_id, workspace_id, channel, thread_ts, topic_index, summary_s,
-                embedding_pg, domain_norm, message_count, participants,
-                str(self.config.context_ttl_days),
-            )
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    if is_new_topic:
+                        lock_key = f"{workspace_id}:{channel}:{thread_ts}"
+                        await conn.execute(
+                            "SELECT pg_advisory_xact_lock(hashtext($1))",
+                            lock_key,
+                        )
+                        max_row = await conn.fetchrow(
+                            """
+                            SELECT COALESCE(MAX(topic_index), -1) AS max_idx
+                            FROM conversation_contexts
+                            WHERE workspace_id = $1 AND channel = $2 AND thread_ts = $3
+                            """,
+                            workspace_id, channel, thread_ts,
+                        )
+                        topic_index = int(max_row["max_idx"]) + 1
+                    else:
+                        topic_index = 0
+
+                    context_id = md5_short(
+                        f"{workspace_id}:{channel}:{thread_ts}:{topic_index}"
+                    )
+                    await conn.execute(
+                        """
+                        INSERT INTO conversation_contexts
+                            (id, workspace_id, channel, thread_ts, topic_index, summary,
+                             embedding, domain, message_count, participants, expires_at)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7::vector,$8,$9,$10,
+                                NOW() + ($11 || ' days')::interval)
+                        ON CONFLICT (workspace_id, channel, thread_ts, topic_index) DO UPDATE
+                        SET summary = EXCLUDED.summary,
+                            embedding = EXCLUDED.embedding,
+                            domain = EXCLUDED.domain,
+                            message_count = EXCLUDED.message_count,
+                            participants = EXCLUDED.participants,
+                            expires_at = EXCLUDED.expires_at
+                        """,
+                        context_id, workspace_id, channel, thread_ts, topic_index,
+                        summary_s, embedding_pg, domain_norm, message_count,
+                        participants, str(self.config.context_ttl_days),
+                    )
             return context_id
         except Exception as exc:  # noqa: BLE001 - never raise on runtime failure
             logger.error("save_context_failed", error_type=type(exc).__name__)

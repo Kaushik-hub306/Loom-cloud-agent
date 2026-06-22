@@ -59,6 +59,33 @@ async def test_teach_duplicate_bumps_confidence_not_duplicates(db_pool):
     assert count == 1
 
 
+async def test_teach_concurrent_duplicates_are_atomic(db_pool):
+    store = make_store(db_pool, NoEmbeddings())
+
+    results = await asyncio.gather(
+        *[
+            store.teach(
+                "coding",
+                "convention",
+                "Concurrent teaches should upsert atomically",
+                confidence=5,
+            )
+            for _ in range(8)
+        ]
+    )
+
+    memory_ids = {result.memory.id for result in results}
+    assert len(memory_ids) == 1
+    count = await db_pool.fetchval(
+        "SELECT COUNT(*) FROM memories WHERE id = $1", next(iter(memory_ids))
+    )
+    confidence = await db_pool.fetchval(
+        "SELECT confidence FROM memories WHERE id = $1", next(iter(memory_ids))
+    )
+    assert count == 1
+    assert confidence == 10
+
+
 async def test_teach_confidence_capped_at_10(db_pool):
     store = make_store(db_pool, NoEmbeddings())
     last = None
@@ -200,6 +227,26 @@ async def test_save_context_new_topic_preserves_existing_summary(db_pool):
         "AND thread_ts='20.1' ORDER BY topic_index"
     )
     assert [r["topic_index"] for r in rows] == [0, 1]
+
+
+async def test_save_context_concurrent_new_topics_keep_distinct_rows(db_pool):
+    store = make_store(db_pool, NoEmbeddings())
+    summaries = [f"distinct topic summary number {idx}" for idx in range(8)]
+
+    ids = await asyncio.gather(
+        *[
+            store.save_context_summary("C2", "30.1", summary, is_new_topic=True)
+            for summary in summaries
+        ]
+    )
+
+    rows = await db_pool.fetch(
+        "SELECT topic_index, summary FROM conversation_contexts WHERE channel='C2' "
+        "AND thread_ts='30.1' ORDER BY topic_index"
+    )
+    assert len(set(ids)) == len(summaries)
+    assert [r["topic_index"] for r in rows] == list(range(len(summaries)))
+    assert {r["summary"] for r in rows} == set(summaries)
 
 
 async def test_search_contexts_applies_recency_weighting(db_pool):
