@@ -53,6 +53,8 @@ class LLMRouter:
         try:
             import litellm
 
+            litellm.suppress_debug_info = True
+
             async with asyncio.timeout(timeout):
                 resp = await litellm.acompletion(
                     model=model,
