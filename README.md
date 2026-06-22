@@ -319,30 +319,139 @@ loom import backup.json --no-regenerate-embeddings
 
 ---
 
-## Slack setup (optional)
+## Slack setup (optional, step by step)
 
-Loom's Slack app runs in **silent observer mode** by default: it does not post
-channel replies, but it must still be invited to channels it should read.
+Slack is optional — Loom works great as MCP-only. Add Slack when you want Loom to
+**silently learn from team conversations** automatically.
 
-Bot token scopes:
+### What the Slack bot does (and doesn't do)
+
+- **Silent observer (default).** Once invited to a channel, it reads every
+  message but **never posts in the channel**. It buffers each conversation, and
+  after the thread goes idle (~3 minutes) a **gatekeeper LLM decides whether the
+  discussion is worth remembering**. If yes, a short summary is saved to your
+  database; if not, it's discarded. (This gatekeeper is the chat LLM — DeepSeek,
+  OpenAI, Claude, or Gemini. Without an LLM key, capture is disabled.)
+- **It does not auto-reply to messages.** The bot only "speaks" when you
+  explicitly ask it: via a slash command (private reply), or — in
+  `--interactive` mode — when you `@mention` it or DM it.
+- **Retrieving memory** is on demand: `/loom-recall`, an `@mention` (interactive
+  mode), or your coding agent calling `session_init`.
+
+### Step 1 — Create the Slack app
+
+1. Go to https://api.slack.com/apps → **Create New App** → **From scratch**.
+2. Name it (e.g. "Loom") and pick your workspace.
+
+### Step 2 — Enable Socket Mode (no public URL needed)
+
+1. In the app, open **Settings → Socket Mode** and toggle it **on**.
+2. When prompted, create an **App-Level Token** with the scope
+   **`connections:write`**. Copy it — it starts with **`xapp-`**.
+   (This is your `LOOM_SLACK_APP_TOKEN`.)
+
+### Step 3 — Add bot token scopes
+
+Open **Features → OAuth & Permissions → Scopes → Bot Token Scopes** and add:
 
 ```
-channels:history channels:read app_mentions:read chat:write im:history commands
+channels:history     # read messages in public channels it's invited to
+channels:read        # see channel metadata
+app_mentions:read    # receive @mentions
+chat:write           # post replies (used only by slash commands / interactive mode)
+im:history           # read DMs sent to the bot
+commands             # enable slash commands
 ```
 
-Optional scopes if needed: `groups:history groups:read mpim:history users:read`.
+Optional (only if you need them): `groups:history`, `groups:read` (private
+channels), `mpim:history` (group DMs), `users:read` (resolve usernames).
 
-Socket Mode: create an App-Level Token with `connections:write`.
+### Step 4 — Subscribe to events
 
-Event subscriptions: `message.channels`, `app_mention`, `message.im`.
+Open **Features → Event Subscriptions**, toggle **on**, and under
+**Subscribe to bot events** add:
 
-Slash commands: `/loom-teach`, `/loom-stats`, `/loom-recall`.
+```
+message.channels     # messages in public channels
+app_mention          # when someone @mentions the bot
+message.im           # direct messages to the bot
+```
 
-Run the worker (it waits for the API `/health` before connecting):
+### Step 5 — Create slash commands
+
+Open **Features → Slash Commands → Create New Command** and add these three
+(the "Request URL" can be any placeholder like `https://example.com` — Socket
+Mode delivers them, so the URL is not actually called):
+
+```
+/loom-teach    Teach Loom a durable team rule
+/loom-recall   Search Loom memory
+/loom-stats    Show Loom memory stats
+```
+
+### Step 6 — Install and copy the bot token
+
+1. Open **Settings → Install App → Install to Workspace** and authorize.
+2. Copy the **Bot User OAuth Token** — it starts with **`xoxb-`**.
+   (This is your `LOOM_SLACK_BOT_TOKEN`.)
+
+### Step 7 — Configure Loom and run the worker
+
+Put both tokens in `.env` (or re-run `bash setup.sh`):
 
 ```bash
-loom slack                 # silent observer (default)
-loom slack --interactive   # also answers DMs/mentions via /ask
+LOOM_SLACK_BOT_TOKEN=xoxb-...      # from step 6
+LOOM_SLACK_APP_TOKEN=xapp-...      # from step 2
+# Enable the gatekeeper "decide what to save" brain (any one of these):
+LOOM_LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=sk-...
+```
+
+The Slack worker talks to the API service, so run **both**:
+
+```bash
+.venv/bin/loom serve     # API service (one terminal)
+.venv/bin/loom slack     # Slack worker (another terminal)
+
+# or, to also answer @mentions and DMs:
+.venv/bin/loom slack --interactive
+```
+
+### Step 8 — Invite the bot to a channel
+
+In Slack, go to the channel and type:
+
+```
+/invite @Loom
+```
+
+That's it — the bot is now silently reading that channel.
+
+### Example: what actually happens
+
+Suppose your team chats in `#engineering`:
+
+```
+@alice:  we keep getting bitten by blocking DB calls in the API
+@bob:    yeah let's make it a rule — always use asyncpg, never psycopg2 in routes
+@alice:  agreed, async everywhere for I/O
+```
+
+1. The bot reads all three messages silently (posts nothing).
+2. ~3 minutes after the thread goes quiet, the gatekeeper LLM (DeepSeek) reads the
+   exchange and decides it's a durable convention worth keeping.
+3. It saves a summary to your database, e.g.
+   *domain: `coding` — "Use async/await for all I/O; use asyncpg, never blocking
+   psycopg2 in API routes."*
+4. **Later, anyone with the same Loom MCP benefits automatically.** When a
+   teammate opens Cursor and starts a task, their agent calls `session_init` and
+   receives that rule in its context — without anyone re-explaining it.
+
+You can also pull on demand, right inside Slack:
+
+```
+/loom-recall database access
+→ (private reply) [HIGH] coding/convention: Use async/await for all I/O ...
 ```
 
 ---

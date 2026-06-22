@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import OrderedDict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -79,11 +79,17 @@ class EmbeddingService:
 
             litellm.suppress_debug_info = True
 
-            resp = await litellm.aembedding(
-                model=self.config.embedding_model,
-                input=[normalized],
-                api_key=self.config.embedding_api_key,
-            )
+            kwargs: dict[str, Any] = {
+                "model": self.config.embedding_model,
+                "input": [normalized],
+                "api_key": self.config.embedding_api_key,
+            }
+            # OpenAI embedding models can emit a chosen output size; request the
+            # configured dimension so vectors fit the fixed VECTOR(n) column.
+            if self.config.embedding_provider == "openai":
+                kwargs["dimensions"] = self.config.embedding_dimension
+
+            resp = await litellm.aembedding(**kwargs)
             vector = resp["data"][0]["embedding"]
         except Exception as exc:  # noqa: BLE001 - runtime failures fall back to text
             logger.warning(

@@ -19,12 +19,12 @@ logger = structlog.get_logger("loom.config")
 
 EnvironmentName = Literal["development", "test", "production"]
 LLMProvider = Literal["deepseek", "gemini", "claude", "openai", "skip"]
-EmbeddingProvider = Literal["gemini", "none"]
+EmbeddingProvider = Literal["gemini", "openai", "none"]
 DBMode = Literal["async", "sync"]
 
 _VALID_ENVS = ("development", "test", "production")
 _VALID_LLM_PROVIDERS = ("deepseek", "gemini", "claude", "openai", "skip")
-_VALID_EMBEDDING_PROVIDERS = ("gemini", "none")
+_VALID_EMBEDDING_PROVIDERS = ("gemini", "openai", "none")
 
 PROVIDER_KEY_ENV = {
     "deepseek": "DEEPSEEK_API_KEY",
@@ -35,7 +35,14 @@ PROVIDER_KEY_ENV = {
 
 EMBEDDING_KEY_ENV = {
     "gemini": "GEMINI_API_KEY",
+    "openai": "OPENAI_API_KEY",
     "none": None,
+}
+
+DEFAULT_EMBEDDING_MODELS = {
+    "gemini": "gemini/text-embedding-004",
+    "openai": "openai/text-embedding-3-small",
+    "none": "gemini/text-embedding-004",
 }
 
 DEFAULT_LLM_MODELS = {
@@ -253,7 +260,10 @@ class LoomConfig:
 
         embedding_key_env = EMBEDDING_KEY_ENV.get(embedding_provider)
         embedding_api_key = get_str(embedding_key_env) if embedding_key_env else None
-        embedding_model = get_str("LOOM_EMBEDDING_MODEL", "gemini/text-embedding-004")
+        default_embedding_model = DEFAULT_EMBEDDING_MODELS.get(
+            embedding_provider, "gemini/text-embedding-004"
+        )
+        embedding_model = get_str("LOOM_EMBEDDING_MODEL", default_embedding_model)
         embedding_dimension = get_int("LOOM_EMBEDDING_DIMENSION", 768)
         embedding_input_max_chars = get_int("LOOM_EMBEDDING_INPUT_MAX_CHARS", 3000)
         embedding_cache_size = get_int("LOOM_EMBEDDING_CACHE_SIZE", 256)
@@ -460,11 +470,15 @@ class LoomConfig:
         try:
             import litellm
 
-            resp = await litellm.aembedding(
-                model=self.embedding_model,
-                input=["ping"],
-                api_key=self.embedding_api_key,
-            )
+            litellm.suppress_debug_info = True
+            kwargs: dict = {
+                "model": self.embedding_model,
+                "input": ["ping"],
+                "api_key": self.embedding_api_key,
+            }
+            if self.embedding_provider == "openai":
+                kwargs["dimensions"] = self.embedding_dimension
+            resp = await litellm.aembedding(**kwargs)
             vector = resp["data"][0]["embedding"]
             if len(vector) != self.embedding_dimension:
                 return CredentialCheck(
