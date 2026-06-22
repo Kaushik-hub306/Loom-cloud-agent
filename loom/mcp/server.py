@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from typing import TYPE_CHECKING, Any
 
@@ -464,22 +465,46 @@ def _log_startup(sync_store: SyncStore) -> None:
     logger.info("mcp_ready")
 
 
-def serve(sync_store: SyncStore) -> None:
-    """Read JSON-RPC requests from stdin and write responses to stdout."""
+def _install_protocol_stdout() -> Any:
+    """Reserve the real stdout for JSON-RPC and redirect everything else away.
+
+    A stdio MCP server must keep stdout as a pure JSON-RPC channel. Third-party
+    libraries (e.g. LiteLLM) sometimes ``print`` banners straight to the
+    process's stdout, which corrupts the stream and makes the client drop the
+    connection. To make that impossible, we:
+
+    1. duplicate the real stdout (fd 1) to a private handle used only for
+       JSON-RPC responses, then
+    2. point fd 1 (and the Python ``sys.stdout`` object) at stderr, so any
+       stray writes from anywhere land on stderr instead of the protocol.
+
+    Returns the private text handle to write JSON-RPC responses to.
+    """
+    real_stdout_fd = os.dup(1)
+    os.dup2(2, 1)  # fd 1 now points at stderr; stray prints can't reach clients
+    sys.stdout = sys.stderr  # stray Python-level print() also goes to stderr
+    return os.fdopen(real_stdout_fd, "w", encoding="utf-8", buffering=1)
+
+
+def serve(sync_store: SyncStore, out: Any) -> None:
+    """Read JSON-RPC requests from stdin and write responses to ``out``."""
     for line in sys.stdin:
         response_line = process_line(line, sync_store)
         if response_line is not None:
-            sys.stdout.write(response_line + "\n")
-            sys.stdout.flush()
+            out.write(response_line + "\n")
+            out.flush()
 
 
 def main() -> None:
+    # Secure the protocol channel before anything (DB drivers, LiteLLM, etc.)
+    # has a chance to write to stdout.
+    protocol_out = _install_protocol_stdout()
     config = LoomConfig.from_env()
     configure_logging(config)
     sync_store, close = build_runtime(config)
     try:
         _log_startup(sync_store)
-        serve(sync_store)
+        serve(sync_store, protocol_out)
     finally:
         close()
 

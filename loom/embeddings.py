@@ -77,6 +77,8 @@ class EmbeddingService:
         try:
             import litellm
 
+            litellm.suppress_debug_info = True
+
             resp = await litellm.aembedding(
                 model=self.config.embedding_model,
                 input=[normalized],
