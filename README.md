@@ -319,7 +319,7 @@ loom import backup.json --no-regenerate-embeddings
 
 ---
 
-## Slack setup (optional, step by step)
+## Slack setup (optional, step by step) — beta
 
 Slack is optional — Loom works great as MCP-only. Add Slack when you want Loom to
 **silently learn from team conversations** automatically.
@@ -523,9 +523,3 @@ loom test
 - Conversation blobs and context summaries expire automatically
   (`LOOM_BLOB_TTL_DAYS`, `LOOM_CONTEXT_TTL_DAYS`).
 - Secrets are never logged; only redacted forms are emitted.
-
----
-
-## License
-
-MIT
