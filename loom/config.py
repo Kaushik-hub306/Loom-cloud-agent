@@ -49,6 +49,32 @@ DEFAULT_LLM_MODELS = {
 _TRUE_VALUES = {"true", "1", "yes", "y", "on"}
 _FALSE_VALUES = {"false", "0", "no", "n", "off"}
 
+_dotenv_loaded = False
+
+
+def _load_dotenv_file() -> None:
+    """Load a local ``.env`` file into ``os.environ`` exactly once.
+
+    This is the single place in Loom that bridges a ``.env`` file into the
+    process environment, keeping ``config.py`` the only module that reads
+    environment variables. Real environment variables always win over the
+    ``.env`` file (``override=False``), so explicit shell exports and
+    container/Railway settings are never clobbered.
+    """
+    global _dotenv_loaded
+    if _dotenv_loaded:
+        return
+    _dotenv_loaded = True
+    # No logging here: this runs during config load, before logging is
+    # configured, and the MCP server requires stdout to carry JSON-RPC only.
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except ImportError:
+        return
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
 
 @dataclass(frozen=True)
 class CredentialCheck:
@@ -157,7 +183,11 @@ class LoomConfig:
     # ------------------------------------------------------------------
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> LoomConfig:
-        env = environ if environ is not None else dict(os.environ)
+        if environ is None:
+            _load_dotenv_file()
+            env = dict(os.environ)
+        else:
+            env = environ
         errors: list[str] = []
 
         def get_str(key: str, default: str | None = None) -> str | None:

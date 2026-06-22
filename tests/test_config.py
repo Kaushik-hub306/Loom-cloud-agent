@@ -189,6 +189,76 @@ def test_config_invalid_integer_raises():
     assert "LOOM_API_PORT" in str(exc.value)
 
 
+def test_from_env_loads_dotenv_file(tmp_path, monkeypatch):
+    """`from_env()` with no explicit environ should read a local .env file."""
+    import os
+
+    import loom.config as config_module
+
+    (tmp_path / ".env").write_text(
+        "LOOM_DATABASE_URL=postgresql://dotenv-host/db\n"
+        "LOOM_LLM_PROVIDER=skip\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_module, "_dotenv_loaded", False)
+
+    # load_dotenv mutates os.environ directly (outside monkeypatch's tracking),
+    # so snapshot and fully restore it to keep the test session isolated.
+    saved_environ = dict(os.environ)
+    os.environ.pop("LOOM_DATABASE_URL", None)
+    os.environ.pop("LOOM_LLM_PROVIDER", None)
+    try:
+        config = LoomConfig.from_env()
+        assert config.database_url == "postgresql://dotenv-host/db"
+        assert config.llm_provider == "skip"
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_environ)
+
+
+def test_real_env_overrides_dotenv_file(tmp_path, monkeypatch):
+    """Explicit environment variables win over values in a .env file."""
+    import os
+
+    import loom.config as config_module
+
+    (tmp_path / ".env").write_text(
+        "LOOM_DATABASE_URL=postgresql://dotenv-host/db\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_module, "_dotenv_loaded", False)
+
+    saved_environ = dict(os.environ)
+    os.environ["LOOM_DATABASE_URL"] = "postgresql://real-env-host/db"
+    os.environ["LOOM_LLM_PROVIDER"] = "skip"
+    try:
+        config = LoomConfig.from_env()
+        assert config.database_url == "postgresql://real-env-host/db"
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_environ)
+
+
+def test_explicit_environ_skips_dotenv(tmp_path, monkeypatch):
+    """Passing an explicit environ must not read any .env file."""
+    import loom.config as config_module
+
+    (tmp_path / ".env").write_text(
+        "LOOM_DATABASE_URL=postgresql://dotenv-host/db\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_module, "_dotenv_loaded", False)
+
+    config = LoomConfig.from_env(
+        {"LOOM_DATABASE_URL": "postgresql://explicit/db", "LOOM_LLM_PROVIDER": "skip"}
+    )
+    assert config.database_url == "postgresql://explicit/db"
+    assert config_module._dotenv_loaded is False
+
+
 def test_config_never_logs_full_secret():
     secret = "super-secret-token-value-1234567890"
     redacted = redact_secret(secret)
