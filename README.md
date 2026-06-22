@@ -47,24 +47,123 @@ Key boundaries (enforced by tests):
 
 ---
 
-## 10-minute local setup
+## Setup (step by step)
 
-### 1. Requirements
+This takes about 10 minutes. The only thing you must have is a Postgres
+database with `pgvector` — the easiest option is a free **Supabase** project
+(used in the steps below). If you'd rather run Postgres locally, see
+[Alternative: local Postgres with Docker](#alternative-local-postgres-with-docker).
 
-- Python 3.11+
-- A PostgreSQL database with the [`pgvector`](https://github.com/pgvector/pgvector)
-  extension (Supabase works out of the box; locally you can use the
-  `pgvector/pgvector` Docker image).
+### Step 0 — Requirements
 
-### 2. Install
+- **Python 3.11 or newer.** Check with `python3 --version`.
+- **A Supabase account** (free) — https://supabase.com — or any Postgres with
+  the `pgvector` extension.
+- **git**.
+
+### Step 1 — Get the code
 
 ```bash
-git clone <your-repo-url> loom && cd loom
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+git clone https://github.com/Kaushik-hub306/Loom-cloud-agent.git loom
+cd loom
 ```
 
-### 3. Run a local Postgres with pgvector (optional)
+> If the `loom` command or code seems to be missing after cloning, you may be on
+> the wrong branch. Run `git checkout cursor/archive-legacy-prototype` (until it
+> is merged into `main`).
+
+### Step 2 — Create an isolated environment, then install
+
+**Do not skip the virtual environment.** It keeps Loom's dependencies separate
+and prevents clashes with any other tool on your machine.
+
+```bash
+python3 -m venv .venv          # create the environment (once)
+source .venv/bin/activate      # activate it (every new terminal)
+pip install -e ".[dev]"        # install Loom + its dependencies
+```
+
+After this, your shell prompt should start with `(.venv)`. Verify the install:
+
+```bash
+loom --version                 # -> loom, version 1.0.0
+which loom                     # -> .../loom/.venv/bin/loom  (must be inside .venv)
+```
+
+> If `which loom` does **not** point inside `.venv`, your virtual environment is
+> not active (or another program named `loom` is installed globally). Run
+> `source .venv/bin/activate` again before continuing.
+
+### Step 3 — Create a Supabase database
+
+1. Go to https://supabase.com and create a new project. Remember the **database
+   password** you set.
+2. Wait for the project to finish provisioning (~1 minute).
+3. Open **Project Settings → Database → Connection string** and copy the **URI**.
+   It looks like this:
+
+   ```
+   postgresql://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres
+   ```
+
+   Replace `[YOUR-PASSWORD]` with the database password from step 1.
+
+You do **not** need to create any tables — Loom creates them automatically on
+first run (including the `pgvector` extension).
+
+### Step 4 — Configure your `.env`
+
+Create your config file from the template:
+
+```bash
+cp .env.example .env
+```
+
+Then open `.env` in an editor and set **one required value** — your database URL:
+
+```bash
+LOOM_DATABASE_URL=postgresql://postgres:YOURPASSWORD@db.YOURREF.supabase.co:5432/postgres
+```
+
+Everything else is optional. For the simplest first run with no extra API keys,
+also set these two (Loom will use plain text search instead of AI embeddings):
+
+```bash
+LOOM_LLM_PROVIDER=skip
+LOOM_EMBEDDING_PROVIDER=none
+```
+
+> Prefer a guided setup? Run `loom init` instead of editing `.env` by hand. It
+> asks for each value, validates the database connection before writing
+> anything, and also generates an MCP config file for your AI tools.
+
+### Step 5 — Verify it works
+
+```bash
+loom status
+```
+
+You should see a table with **Database: connected**. That confirms Loom reached
+Supabase and created its tables. Add a few demo rules and start the API:
+
+```bash
+python scripts/seed_demo.py    # optional: inserts a handful of example rules
+loom serve                     # starts the API at http://localhost:8000
+```
+
+In another terminal (remember to `source .venv/bin/activate` first):
+
+```bash
+curl http://localhost:8000/health     # -> {"status":"ok", ...}
+loom recall "async database access"   # -> lists matching rules
+```
+
+That's it — Loom is running. Next, [connect it to your AI tools](#add-loom-to-your-ai-tools).
+
+### Alternative: local Postgres with Docker
+
+If you'd rather not use Supabase, run Postgres + pgvector locally with Docker and
+point `LOOM_DATABASE_URL` at it:
 
 ```bash
 docker run -d --name loom-pg \
@@ -72,45 +171,25 @@ docker run -d --name loom-pg \
   -p 5432:5432 pgvector/pgvector:pg16
 ```
 
-### 4. Configure
-
 ```bash
-cp .env.example .env
-# Edit .env: set LOOM_DATABASE_URL (required). Everything else is optional.
+# in .env:
+LOOM_DATABASE_URL=postgresql://postgres:loom@localhost:5432/loom
 ```
 
-Or run the guided wizard, which validates credentials before writing anything:
+Then continue from [Step 5](#step-5--verify-it-works).
 
-```bash
-loom init
-```
+### Common setup problems
 
-`loom init` writes:
-
-- `.env` with your settings (secrets never echoed),
-- a ready-to-copy MCP config at `~/.claude/loom-mcp-config.json` (contains only
-  `LOOM_DATABASE_URL` and, if configured, `GEMINI_API_KEY` — no Slack secrets).
-
-It refuses to write any files if credential validation fails.
-
-### 5. Verify
-
-```bash
-loom serve                 # starts the API; visit http://localhost:8000/health
-loom status                # status table for DB, API, Slack, and counts
-```
-
----
-
-## Supabase + pgvector
-
-1. Create a Supabase project.
-2. In the SQL editor, enable pgvector: `create extension if not exists vector;`
-   (Loom's migrations also do this automatically.)
-3. Copy the connection string (pooler or direct) into `LOOM_DATABASE_URL`.
-
-The schema in `supabase/schema.sql` is idempotent and is applied automatically
-on startup. You can also apply it manually.
+- **`ImportError: cannot import name 'cli'` or `loom` runs the wrong program.**
+  Another package named `loom` is installed globally and is shadowing this one.
+  Make sure your virtual environment is active (`source .venv/bin/activate`) and
+  that `which loom` points inside `.venv`.
+- **`Database: error` in `loom status`.** Double-check `LOOM_DATABASE_URL` in
+  `.env` (password, project ref, no extra spaces). Confirm `.env` is in the
+  folder you run `loom` from. Test the raw URL works from your machine.
+- **Changes to `.env` seem ignored.** A real environment variable of the same
+  name always overrides `.env`. Check with `printenv | grep LOOM_` and `unset`
+  any stale values.
 
 ---
 
@@ -118,6 +197,11 @@ on startup. You can also apply it manually.
 
 `loom init` generates the config below. Embeddings are optional — without
 `GEMINI_API_KEY`, Loom falls back to full-text search.
+
+> **Important:** the `command` must be a Python that has Loom installed. If you
+> used the virtual environment from setup, use its full path instead of bare
+> `python3` — for example `/path/to/loom/.venv/bin/python`. Find it by running
+> `which python` while the venv is active.
 
 ### Claude Code
 
