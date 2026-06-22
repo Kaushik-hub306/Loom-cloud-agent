@@ -89,12 +89,33 @@ else
     [ -z "$DB_URL" ] && warn "   Required — please paste the connection string."
   done
 
-  # --- Gemini key (optional: smart search + AI answers) ---
+  # --- Smart search provider (optional) ---
   say ""
-  say "${BOLD}2) Gemini API key${RESET}  ${DIM}(optional — enables smart semantic search + /ask answers)${RESET}"
-  say "${DIM}   Get one free at https://aistudio.google.com/apikey${RESET}"
-  printf "   ${BOLD}Gemini API key:${RESET} "
-  read -r GEMINI_KEY || true
+  say "${BOLD}2) Smart search${RESET}  ${DIM}(optional — embeddings for meaning-based recall + /ask)${RESET}"
+  say "   ${DIM}[1] OpenAI (recommended)   [2] Gemini   [Enter] skip (use text search)${RESET}"
+  printf "   ${BOLD}Choose 1, 2, or Enter:${RESET} "
+  read -r EMB_CHOICE || true
+
+  OPENAI_KEY=""; GEMINI_KEY=""
+  EMB_PROVIDER="none"; LLM_PROVIDER="skip"; EMB_MODEL="gemini/text-embedding-004"
+  case "${EMB_CHOICE:-}" in
+    1)
+      say "${DIM}   Get a key at https://platform.openai.com/api-keys${RESET}"
+      printf "   ${BOLD}OpenAI API key (sk-…):${RESET} "
+      read -r OPENAI_KEY || true
+      if [ -n "$OPENAI_KEY" ]; then
+        EMB_PROVIDER="openai"; LLM_PROVIDER="openai"
+        EMB_MODEL="openai/text-embedding-3-small"
+      fi ;;
+    2)
+      say "${DIM}   Get a key free at https://aistudio.google.com/apikey${RESET}"
+      printf "   ${BOLD}Gemini API key:${RESET} "
+      read -r GEMINI_KEY || true
+      if [ -n "$GEMINI_KEY" ]; then
+        EMB_PROVIDER="gemini"; LLM_PROVIDER="gemini"
+        EMB_MODEL="gemini/text-embedding-004"
+      fi ;;
+  esac
 
   # --- Slack (optional) ---
   say ""
@@ -106,13 +127,6 @@ else
   if [ -n "${SLACK_BOT:-}" ]; then
     printf "   ${BOLD}Slack app token (xapp-…):${RESET} "
     read -r SLACK_APP || true
-  fi
-
-  # --- Derive providers from what was given ---
-  if [ -n "${GEMINI_KEY:-}" ]; then
-    LLM_PROVIDER="gemini"; EMB_PROVIDER="gemini"
-  else
-    LLM_PROVIDER="skip";   EMB_PROVIDER="none"
   fi
 
   # --- Auto-generate API tokens (needed when Slack is enabled; harmless otherwise) ---
@@ -133,10 +147,11 @@ else
     echo "LOOM_API_PORT=8000"
     echo ""
     echo "LOOM_LLM_PROVIDER=$LLM_PROVIDER"
+    echo "OPENAI_API_KEY=${OPENAI_KEY:-}"
     echo "GEMINI_API_KEY=${GEMINI_KEY:-}"
     echo ""
     echo "LOOM_EMBEDDING_PROVIDER=$EMB_PROVIDER"
-    echo "LOOM_EMBEDDING_MODEL=gemini/text-embedding-004"
+    echo "LOOM_EMBEDDING_MODEL=$EMB_MODEL"
     echo ""
     echo "LOOM_SLACK_BOT_TOKEN=${SLACK_BOT:-}"
     echo "LOOM_SLACK_APP_TOKEN=${SLACK_APP:-}"
@@ -145,7 +160,7 @@ else
   } > .env
   ok "Wrote .env"
   if [ "$EMB_PROVIDER" = "none" ]; then
-    warn "No Gemini key — Loom will use plain text search (add a key to .env later for smart search)."
+    warn "No embeddings key — Loom will use plain text search (re-run setup or edit .env to add one)."
   fi
 fi
 
@@ -195,9 +210,10 @@ vpy = sys.argv[1]
 cfg = LoomConfig.from_env()
 
 env = {"LOOM_DATABASE_URL": cfg.database_url}
-if cfg.embedding_provider == "gemini" and cfg.embedding_api_key:
-    env["GEMINI_API_KEY"] = cfg.embedding_api_key
-    env["LOOM_EMBEDDING_PROVIDER"] = "gemini"
+if cfg.embedding_provider in ("gemini", "openai") and cfg.embedding_api_key:
+    key_name = "OPENAI_API_KEY" if cfg.embedding_provider == "openai" else "GEMINI_API_KEY"
+    env[key_name] = cfg.embedding_api_key
+    env["LOOM_EMBEDDING_PROVIDER"] = cfg.embedding_provider
     env["LOOM_EMBEDDING_MODEL"] = cfg.embedding_model
 else:
     env["LOOM_EMBEDDING_PROVIDER"] = "none"
