@@ -47,7 +47,45 @@ Key boundaries (enforced by tests):
 
 ---
 
-## Setup (step by step)
+## Quick start (one command)
+
+Clone, run the setup script, answer the prompts, and **paste the MCP config it
+prints into your coding tool**. That's the whole thing.
+
+```bash
+git clone https://github.com/Kaushik-hub306/Loom-cloud-agent.git loom
+cd loom
+bash setup.sh
+```
+
+`setup.sh` will:
+
+1. Create an isolated environment and install Loom (no clashes with anything
+   else on your machine).
+2. Ask you for everything it needs, right in the terminal:
+   - **Database URL** (required) — your Supabase connection string
+     (Project Settings → Database → Connection string → URI).
+   - **Gemini API key** (optional) — enables smart semantic search; Enter to skip.
+   - **Slack tokens** (optional) — Enter to skip.
+3. Verify the database connection and create the tables.
+4. Print a ready-to-paste **MCP config** (and save it to `loom-mcp.json`).
+
+Finally, paste that JSON into your coding tool and restart it:
+
+- **Cursor** → create `.cursor/mcp.json` in your project and paste it in.
+- **Claude Code** → `claude mcp add-json loom '<the JSON>'`.
+- **Claude Desktop** → add the block to `claude_desktop_config.json`.
+
+Your agent can now call Loom's tools (`session_init`, `recall`, `teach`,
+`get_stats`). The generated config uses an absolute path to the project's Python,
+so it works no matter which folder your tool launches it from.
+
+> Re-run `bash setup.sh` any time — it's safe and will offer to reuse your
+> existing `.env`. Prefer to do it by hand? See the manual steps below.
+
+---
+
+## Setup (step by step, manual)
 
 This takes about 10 minutes. The only thing you must have is a Postgres
 database with `pgvector` — the easiest option is a free **Supabase** project
