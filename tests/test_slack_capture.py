@@ -118,7 +118,7 @@ async def test_gatekeeper_saves_nothing_on_nothing_response():
     assert api_client.save_context_summary.await_count == 0
 
 
-async def test_gatekeeper_debounce_skips_within_3_minutes():
+async def test_gatekeeper_debounce_skips_llm_but_still_saves_blob():
     buffer, api_client, llm_router = make_buffer(
         make_config(gatekeeper_debounce_seconds=180), llm_text="NOTHING"
     )
@@ -127,7 +127,38 @@ async def test_gatekeeper_debounce_skips_within_3_minutes():
     assert llm_router.complete.await_count == 1
     second = await buffer.force_evaluate(workspace_id="W", channel="C1", thread_ts="T1")
     assert second is None
+    assert api_client.save_conversation_blob.await_count == 2
     assert llm_router.complete.await_count == 1  # not called again
+
+
+async def test_gatekeeper_retries_after_blob_save_rejected():
+    buffer, api_client, llm_router = make_buffer(llm_text="NOTHING")
+    api_client.save_conversation_blob.side_effect = [
+        {"id": "", "saved": False},
+        {"id": "b", "saved": True},
+    ]
+    await _add(buffer, "first message about a topic")
+
+    first = await buffer.force_evaluate(workspace_id="W", channel="C1", thread_ts="T1")
+    assert first is None
+    assert llm_router.complete.await_count == 0
+
+    second = await buffer.force_evaluate(workspace_id="W", channel="C1", thread_ts="T1")
+    assert second.action == "nothing"
+    assert api_client.save_conversation_blob.await_count == 2
+    assert llm_router.complete.await_count == 1
+
+
+async def test_gatekeeper_treats_summary_save_rejected_as_failure():
+    buffer, api_client, _ = make_buffer(
+        llm_text="CONTEXT: architecture | We chose async asyncpg for IO."
+    )
+    api_client.save_context_summary.return_value = {"id": "", "saved": False}
+    await _add(buffer, "discussion about async io")
+
+    result = await buffer.force_evaluate(workspace_id="W", channel="C1", thread_ts="T1")
+    assert result is None
+    assert api_client.save_context_summary.await_count == 1
 
 
 async def test_gatekeeper_survives_llm_failure():
