@@ -150,20 +150,21 @@ class ConversationBuffer:
     ) -> GatekeeperResult | None:
         key = self._key(workspace_id, channel, thread_ts)
         try:
-            if self._debounced(key):
-                logger.debug("gatekeeper_debounced", key=key)
-                return None
-
             buffer = self._buffers.get(key)
             if not buffer:
                 return None
             messages = list(buffer)
 
+            # Always persist the raw blob before invoking the LLM.
+            if not await self._save_blob(workspace_id, channel, thread_ts, messages):
+                return None
+
+            if self._debounced(key):
+                logger.debug("gatekeeper_debounced", key=key)
+                return None
+
             # Mark evaluated up-front so concurrent triggers debounce.
             self._last_eval[key] = time.monotonic()
-
-            # Always persist the raw blob before invoking the LLM.
-            await self._save_blob(workspace_id, channel, thread_ts, messages)
 
             if self.config.llm_provider == "skip" or not self.config.llm_api_key:
                 logger.debug("gatekeeper_llm_disabled")
@@ -182,9 +183,10 @@ class ConversationBuffer:
             if result.action == "nothing":
                 return result
 
-            await self._save_summary(
+            if not await self._save_summary(
                 workspace_id, channel, thread_ts, messages, result
-            )
+            ):
+                return None
             return result
         except Exception as exc:  # noqa: BLE001 - capture must never crash worker
             logger.error("gatekeeper_unexpected_error", error_type=type(exc).__name__)
@@ -192,9 +194,9 @@ class ConversationBuffer:
 
     async def _save_blob(
         self, workspace_id: str, channel: str, thread_ts: str, messages: list[dict]
-    ) -> None:
+    ) -> bool:
         try:
-            await self.api_client.save_conversation_blob(
+            response = await self.api_client.save_conversation_blob(
                 {
                     "workspace_id": workspace_id,
                     "channel": channel,
@@ -202,8 +204,12 @@ class ConversationBuffer:
                     "messages": messages,
                 }
             )
+            if response.get("saved") and response.get("id"):
+                return True
+            logger.warning("save_blob_failed", reason="not_saved")
         except Exception as exc:  # noqa: BLE001
             logger.warning("save_blob_failed", error_type=type(exc).__name__)
+        return False
 
     async def _save_summary(
         self,
@@ -212,10 +218,10 @@ class ConversationBuffer:
         thread_ts: str,
         messages: list[dict],
         result: GatekeeperResult,
-    ) -> None:
+    ) -> bool:
         participants = sorted({m["user"] for m in messages if m.get("user")})
         try:
-            await self.api_client.save_context_summary(
+            response = await self.api_client.save_context_summary(
                 {
                     "workspace_id": workspace_id,
                     "channel": channel,
@@ -227,8 +233,12 @@ class ConversationBuffer:
                     "is_new_topic": result.action == "context_new",
                 }
             )
+            if response.get("saved") and response.get("id"):
+                return True
+            logger.warning("save_summary_failed", reason="not_saved")
         except Exception as exc:  # noqa: BLE001
             logger.warning("save_summary_failed", error_type=type(exc).__name__)
+        return False
 
     @staticmethod
     def _build_user_prompt(messages: list[dict]) -> str:
